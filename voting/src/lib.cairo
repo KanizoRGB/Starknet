@@ -1,84 +1,90 @@
-use starknet::ContractAddress;
-use starknet::get_caller_address;
-use array::ArrayTrait;
+use starknet::{Store,SyscallResult,StorageBaseAddress};
 
-
-#[starknet::interface]
-#[derive(Drop,Copy,Serde,starknet::Store)]
-    struct Book{
-        Title:felt252,
-    }
-trait DatabaseTrait<T> {
-    fn display_books(self: @T);
-    // fn add_book(ref self:T,book:Book);
-}
-
-#[starknet::contract]
-mod add_book {
-
-    use starknet::ContractAddress;
-    use starknet::get_caller_address;
-
-    use super::Book;
-
-    trait BookTrait{
-        fn book_title_display(ref self:Book)->felt252;
+impl StoreFelt252Array of Store<Array<felt252>> {
+    fn read(address_domain: u32, base: StorageBaseAddress) -> SyscallResult<Array<felt252>> {
+        StoreFelt252Array::read_at_offset(address_domain, base, 0)
     }
 
-    impl BookTraitImpl of BookTrait{
-        fn book_title_display(ref self:Book)->felt252{
-            self.Title
-     }
+    fn write(
+        address_domain: u32, base: StorageBaseAddress, value: Array<felt252>
+    ) -> SyscallResult<()> {
+        StoreFelt252Array::write_at_offset(address_domain, base, 0, value)
     }
 
+    fn read_at_offset(
+        address_domain: u32, base: StorageBaseAddress, mut offset: u8
+    ) -> SyscallResult<Array<felt252>> {
+        let mut arr: Array<felt252> = ArrayTrait::new();
 
+        // Read the stored array's length. If the length is superior to 255, the read will fail.
+        let len: u8 = Store::<u8>::read_at_offset(address_domain, base, offset)
+            .expect('Storage Span too large');
+        offset += 1;
 
-    //This is the structure that stores all variables i.e the various types of books
-    #[storage]
-    struct Storage {
-        Bk:Array<Book>,
-    }
-
-
-    #[constructor]
-    fn constructor(ref self:ContractState){
-        let book1 = Book{Title:'Be Rich',};
-        let book2 = Book{Title:'1000 ways',};
-        let book3 = Book{Title:'Influence People',};
-        let book4 = Book{Title:'Lorem Ipsum',};
-        let book5 = Book{Title:'Hello world',};
-
-        let mut db:Array<Book> = ArrayTrait::new();
-        self.Bk.write(db,);
-
-        let mut db = self.Bk.read();
-        db.append(book1);
-        db.append(book2);
-        db.append(book3);
-        db.append(book4);
-        db.append(book5);
-     }
-
-    #[external(v0)]
-    impl DatabaseTraitImp of super::DatabaseTrait<ContractState>{
-
-        fn display_books(self: @ContractState){
-            let mut arr = ArrayTrait::<Book>::new();
-            arr = self.Bk.read();
-
-            let len = arr.len();
-            let mut i:usize = 0;
-
-            loop{
-                if len<i{
-                    break;
-                }
-                let mut books:Book = *arr.at(i);
-                books.book_title_display();
-                i+=1;
+        // Sequentially read all stored elements and append them to the array.
+        let exit = len + offset;
+        loop {
+            if offset >= exit {
+                break;
             }
-            //self.Bk.read()
+
+            let value = Store::<felt252>::read_at_offset(address_domain, base, offset).unwrap();
+            arr.append(value);
+            offset += Store::<felt252>::size();
+        };
+
+        // Return the array.
+        Result::Ok(arr)
+    }
+
+    fn write_at_offset(
+        address_domain: u32, base: StorageBaseAddress, mut offset: u8, mut value: Array<felt252>
+    ) -> SyscallResult<()> {
+        // // Store the length of the array in the first storage slot.
+        let len: u8 = value.len().try_into().expect('Storage - Span too large');
+        Store::<u8>::write_at_offset(address_domain, base, offset, len);
+        offset += 1;
+
+        // Store the array elements sequentially
+        loop {
+            match value.pop_front() {
+                Option::Some(element) => {
+                    Store::<felt252>::write_at_offset(address_domain, base, offset, element);
+                    offset += Store::<felt252>::size();
+                },
+                Option::None(_) => { break Result::Ok(()); }
+            };
         }
     }
 
+    fn size() -> u8 {
+        255 * Store::<felt252>::size()
+    }
+}
+
+#[starknet::interface]
+trait IStoreArrayContract<TContractState> {
+    fn store_array(ref self: TContractState, arr: Array<felt252>);
+    fn read_array(self: @TContractState) -> Array<felt252>;
+}
+
+#[starknet::contract]
+mod StoreArrayContract {
+    use super::StoreFelt252Array;
+
+    #[storage]
+    struct Storage {
+        arr: Array<felt252>
+    }
+
+    #[abi(embed_v0)]
+    impl StoreArrayImpl of super::IStoreArrayContract<ContractState> {
+        fn store_array(ref self: ContractState, arr: Array<felt252>) {
+            self.arr.write(arr);
+        }
+
+        fn read_array(self: @ContractState) -> Array<felt252> {
+            self.arr.read()
+        }
+    }
 }
